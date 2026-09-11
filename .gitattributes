@@ -1,0 +1,29 @@
+# Finais de linha: LF sempre, no repositório e no checkout.
+#
+# ISSO NÃO É PREFERÊNCIA DE ESTILO, É O QUE FAZ O PROJETO RODAR NO WINDOWS.
+#
+# O instalador do Git para Windows liga `core.autocrlf=true` por padrão, então
+# um clone lá converteria LF para CRLF. Vários arquivos deste repositório são
+# montados dentro de containers Linux e executados por eles:
+#
+#   backend/volumes/auth-seed/seed.sh   roda como `command: ["/seed.sh"]`
+#   backend/volumes/db/*.sql            rodam no initdb do Postgres
+#   backend/migrations/*.sql            idem
+#   backend/volumes/kong/kong.yml       lido pelo Kong
+#
+# Com CRLF, o shebang do seed.sh vira `#!/bin/sh\r` e o kernel procura um
+# interpretador que não existe. O container morre, o usuário demo nunca é
+# criado e o login não funciona, sem nenhuma mensagem que aponte para a causa.
+#
+# `eol=lf` força o checkout em LF em qualquer sistema, inclusive no Windows,
+# e não depende de o candidato ter configurado nada.
+* text=auto eol=lf
+
+# Binários não devem sofrer conversão nenhuma.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff  binary
+*.woff2 binary
