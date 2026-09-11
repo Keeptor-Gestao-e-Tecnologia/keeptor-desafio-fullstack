@@ -150,21 +150,25 @@ services:
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
       PGRST_DB_USE_LEGACY_GUCS: "false"
-      # Server administrativo (só dentro da rede docker) usado pelo healthcheck.
-      PGRST_ADMIN_SERVER_PORT: "3001"
-    command: ["postgrest"]
-    healthcheck:
-      # A imagem é Ubuntu sem curl/wget: usamos /dev/tcp do bash contra o
-      # endpoint /ready do admin server do PostgREST.
-      test:
-        - CMD
-        - bash
-        - -c
-        - 'exec 3<>/dev/tcp/127.0.0.1/3001 && printf "GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && head -n 1 <&3 | grep -q "200"'
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
+    # ESTE SERVIÇO NÃO TEM healthcheck, E ISSO É DE PROPÓSITO.
+    #
+    # A imagem postgrest/postgrest:v12.2.12 é materialmente diferente por
+    # arquitetura. Em arm64 são 4 camadas sobre Ubuntu; em amd64 é UMA camada
+    # sobre scratch, com 24 arquivos no total, e o único executável é
+    # /bin/postgrest. Não há bash, sh, curl, wget, head nem grep. Qualquer
+    # healthcheck que invoque um comando falha ali com
+    # `exec: "bash": executable file not found in $PATH`, o container fica
+    # unhealthy para sempre e o `npm run smoke` reprova no passo 2 em todo PC
+    # Intel/AMD e em todo Windows (WSL2 roda amd64), com o backend 100% de pé.
+    #
+    # Não adianta trocar o comando: em scratch não existe binário nenhum para
+    # invocar. E um healthcheck que não testa nada é pior do que nenhum. Quem
+    # prova que o PostgREST está servindo é o passo 3 do smoke, com um
+    # GET /rest/v1/uf de verdade, atravessando o Kong.
+    #
+    # `command` também fica de fora de propósito: o Cmd embutido na imagem já é
+    # o certo para cada arquitetura (/bin/postgrest em amd64, postgrest em
+    # arm64) e não depende do PATH, que a imagem amd64 sequer declara.
 
   # -------------------------------------------------------------------------
   # postgres-meta: backend do Studio (introspecção de schema) e rota /pg/*

@@ -211,8 +211,21 @@ for (;;) {
 }
 if (process.stdout.isTTY) process.stdout.write(`\r${' '.repeat(100)}\r`)
 
+// Nem todo serviço tem healthcheck, e isso é esperado: a imagem do PostgREST
+// em amd64 é scratch, sem shell, então ela não pode ter um. O relatório conta
+// os dois grupos em vez de afirmar que estão "todos healthy".
+const situacao = SERVICOS.map((c) => saude(c))
+const nHealthy = situacao.filter((s) => s === 'healthy').length
+const nSemHc = situacao.filter((s) => s === 'sem-healthcheck').length
+
 if (pendentes.length === 0 && seeder === 'ok') {
-  ok('6/6 serviços running e healthy; seeder do usuário demo concluiu com sucesso')
+  const detalhe = nSemHc
+    ? `${nHealthy} healthy, ${nSemHc} sem healthcheck (esperado)`
+    : `${nHealthy} healthy`
+  ok(
+    `${SERVICOS.length}/${SERVICOS.length} serviços running, ${detalhe};` +
+      ' seeder do usuário demo concluiu com sucesso',
+  )
 } else if (pendentes.length === 0) {
   nao(
     `Os 6 serviços subiram, mas o seeder do usuário demo não concluiu (${seeder}).`,
@@ -230,6 +243,11 @@ if (pendentes.length === 0 && seeder === 'ok') {
 }
 for (const c of SERVICOS) info(`${c.padEnd(18)} ${estado(c).padEnd(10)} ${saude(c)}`)
 info(`${SEEDER.padEnd(18)} ${estado(SEEDER).padEnd(10)} one-shot: ${seeder}`)
+if (nSemHc) {
+  info('sem-healthcheck aqui não é falha: o rest fica sem healthcheck de propósito,')
+  info('porque a imagem do PostgREST em amd64 é scratch e não tem shell para invocar.')
+  info('Quem prova que ele está servindo é o passo 3, logo abaixo.')
+}
 
 // ===========================================================================
 // 3. PostgREST servindo dados

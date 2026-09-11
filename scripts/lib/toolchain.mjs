@@ -241,6 +241,14 @@ export const SERVICOS = [
   'desafio-kong',
   'desafio-studio',
 ]
-export const PRECISAM_HEALTHY = ['desafio-db', 'desafio-auth', 'desafio-rest', 'desafio-kong']
+/**
+ * Serviços cujo healthcheck o smoke espera ficar `healthy`.
+ *
+ * `desafio-rest` está FORA de propósito: a imagem do PostgREST em amd64 é
+ * scratch, sem shell e sem utilitário nenhum, então ela não pode ter
+ * healthcheck (veja o comentário do serviço `rest` no docker-compose.yml).
+ * Quem prova que o PostgREST está servindo é o passo 3.
+ */
+export const PRECISAM_HEALTHY = ['desafio-db', 'desafio-auth', 'desafio-kong']
 export const SEEDER = 'desafio-auth-seed'
 export const CONTAINER_DB = 'desafio-db'
