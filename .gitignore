@@ -1,0 +1,18 @@
+# Ambiente local (gerado a partir de .env.example pelo `npm run setup`)
+.env
+.env.*
+!.env.example
+# Arquivos de exemplo, já sem chave, podem ser commitados
+!.env.*.example
+
+# A configuração da sua ferramenta de AI (.claude/, CLAUDE.md, .cursor/,
+# .mcp.json e afins) NÃO é ignorada de propósito: faz parte da entrega.
+# Veja o item 4 do README.md. Tire as chaves antes de commitar.
+
+# Node
+node_modules/
+dist/
+*.log
+
+# macOS
+.DS_Store

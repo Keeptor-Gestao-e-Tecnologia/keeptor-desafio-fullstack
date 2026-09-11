@@ -1,0 +1,71 @@
+# ---------------------------------------------------------------------------
+# Kong declarativo (DB-less): API unificada do desafio em http://localhost:8000
+#
+#   /auth/v1/*  -> auth:9999   (GoTrue)
+#   /rest/v1/*  -> rest:3000   (PostgREST)
+#   /pg/*       -> meta:8080   (postgres-meta)
+#
+# Diferença proposital em relação ao stack oficial do Supabase: aqui NÃO há
+# plugins key-auth/acl nem consumers. Motivos:
+#   1. O arquivo fica 100% estático (montado read-only, sem template/eval).
+#   2. Não existe chance de a ANON_KEY do .env divergir da chave embutida aqui
+#      que é a causa clássica de "401 sem explicação" em ambiente local.
+# A validação do token continua acontecendo onde importa: o PostgREST valida a
+# assinatura do JWT e resolve o role (anon / authenticated / service_role), e o
+# GoTrue valida as credenciais do login.
+#
+# ATENÇÃO: isto é um ambiente de DESENVOLVIMENTO LOCAL. Não exponha na internet.
+#
+# ---------------------------------------------------------------------------
+# O PLUGIN `cors` NÃO TEM CONFIG, E ISSO É DE PROPÓSITO. Não "melhore".
+#
+# Sem `config.headers`, o Kong ecoa no `Access-Control-Allow-Headers` os
+# headers que o navegador pediu no preflight. Uma lista explícita parece mais
+# segura, mas passa a quebrar a cada header novo do cliente: já aconteceu aqui
+# com o `x-supabase-api-version`, que o @supabase/supabase-js 2.116 passou a
+# mandar em toda requisição de auth. O preflight recusava, o browser abortava
+# antes de sair, e o login parava de funcionar com o backend inteiro saudável.
+# curl não faz preflight, então o erro só aparecia no navegador.
+#
+# É também o que o kong.yml oficial do supabase/docker faz: todas as 18
+# declarações de `cors` lá são `- name: cors`, sem config alguma.
+#
+# O passo 9 do `scripts/smoke.mjs` valida isso com um OPTIONS de verdade, com
+# todos os headers que o supabase-js envia. Se alguém reintroduzir uma lista
+# explícita e ela ficar incompleta, o smoke reprova e diz qual header faltou.
+# ---------------------------------------------------------------------------
+_format_version: "2.1"
+
+services:
+  # --- GoTrue -------------------------------------------------------------
+  - name: auth-v1
+    url: http://auth:9999/
+    routes:
+      - name: auth-v1-all
+        strip_path: true
+        paths:
+          - /auth/v1/
+    plugins:
+      - name: cors
+
+  # --- PostgREST ----------------------------------------------------------
+  - name: rest-v1
+    url: http://rest:3000/
+    routes:
+      - name: rest-v1-all
+        strip_path: true
+        paths:
+          - /rest/v1/
+    plugins:
+      - name: cors
+
+  # --- postgres-meta ------------------------------------------------------
+  - name: meta
+    url: http://meta:8080/
+    routes:
+      - name: meta-all
+        strip_path: true
+        paths:
+          - /pg/
+    plugins:
+      - name: cors

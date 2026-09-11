@@ -1,0 +1,272 @@
+# ---------------------------------------------------------------------------
+# Desafio Fullstack Keeptor: stack Supabase enxuto (6 serviços)
+#
+# Não inclui: realtime, storage, imgproxy, edge-functions, vector e analytics
+# (logflare). O analytics em especial tem cold-start longo e derruba o stack
+# em cascata quando o healthcheck estoura. O desafio não precisa dele.
+#
+# Uso (sempre a partir da RAIZ do repositório):
+#   npm run up | npm run down | npm run reset | npm run logs -- db
+#   npm run psql | npm run status | npm run smoke
+#
+# Todas as variáveis têm default embutido, então o stack sobe mesmo sem `.env`.
+# O `.env` (criado a partir de `.env.example`) sobrescreve os defaults.
+# ---------------------------------------------------------------------------
+name: desafio-fullstack
+
+services:
+  # -------------------------------------------------------------------------
+  # PostgreSQL (imagem Supabase: já traz schemas auth/extensions, roles anon /
+  # authenticated / service_role / authenticator / supabase_auth_admin e as
+  # extensões pgcrypto, uuid-ossp, pg_trgm...).
+  #
+  # As migrations em backend/migrations rodam SOMENTE no primeiro boot
+  # (quando o volume db-data está vazio), em ordem numérica.
+  # -------------------------------------------------------------------------
+  db:
+    image: supabase/postgres:15.8.1.060
+    container_name: desafio-db
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your-super-secret-and-long-postgres-password}
+      PGDATABASE: ${POSTGRES_DB:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-your-super-secret-and-long-postgres-password}
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      JWT_EXP: ${JWT_EXPIRY:-3600}
+    ports:
+      # Postgres exposto no host para psql / DBeaver / TablePlus.
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Senhas dos roles internos + GUCs de JWT (rodam antes das migrations).
+      - ./volumes/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:ro
+      - ./volumes/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:ro
+      # Migrations do desafio (backend/migrations). O prefixo 99- garante que
+      # rodem DEPOIS das migrations internas da imagem; o sufixo 0001/0002
+      # garante a ordem entre elas.
+      # (O usuário demo NÃO é criado aqui; veja o serviço auth-seed no fim.)
+      - ./migrations/0001_geo.sql:/docker-entrypoint-initdb.d/migrations/99-0001-geo.sql:ro
+      - ./migrations/0002_seed_ibge.sql:/docker-entrypoint-initdb.d/migrations/99-0002-seed-ibge.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      # O primeiro boot roda as migrations internas + o seed de 5.571
+      # municípios; dar folga aqui evita "unhealthy" falso.
+      start_period: 120s
+
+  # -------------------------------------------------------------------------
+  # GoTrue: /auth/v1/*  (login, signup, refresh, logout)
+  # -------------------------------------------------------------------------
+  auth:
+    image: supabase/gotrue:v2.177.0
+    container_name: desafio-auth
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL:-http://localhost:8000}
+
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD:-your-super-secret-and-long-postgres-password}@db:5432/${POSTGRES_DB:-postgres}
+
+      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:5173}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS:-http://localhost:5173,http://localhost:5173/*}
+      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP:-false}
+
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY:-3600}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
+      # Sem SMTP no ambiente local: e-mail já nasce confirmado.
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_SMS_AUTOCONFIRM: "true"
+
+      GOTRUE_LOG_LEVEL: ${GOTRUE_LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # auth-seed: cria o usuário demo. Roda UMA vez e sai.
+  #
+  # Por que não é uma migration SQL: as tabelas do schema `auth` não são
+  # criadas pelo Postgres, e sim pelo próprio GoTrue, nas migrations dele,
+  # que rodam DEPOIS que o initdb do Postgres termina. Um INSERT em
+  # `auth.users` vindo de /docker-entrypoint-initdb.d executa cedo demais:
+  # a tabela ainda não existe. A Admin API do GoTrue é o caminho canônico.
+  #
+  # Fica no compose (e não num alvo do Makefile) para que `docker compose
+  # up -d` puro já entregue o ambiente pronto, sem depender do make.
+  # -------------------------------------------------------------------------
+  auth-seed:
+    image: curlimages/curl:8.11.1
+    container_name: desafio-auth-seed
+    restart: "no"
+    depends_on:
+      auth:
+        condition: service_healthy
+    environment:
+      AUTH_URL: http://auth:9999
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTc2NzIyNTYwMCwiZXhwIjoyMDUxMjIyNDAwfQ.t9-BExJIPiljoy9ufGv_byaZcGB1wyzaj61-D0Hzils}
+      SEED_EMAIL: ${SEED_EMAIL:-desafio@keeptor.com}
+      SEED_PASSWORD: ${SEED_PASSWORD:-desafio123}
+    entrypoint: ["/bin/sh"]
+    command: ["/seed.sh"]
+    volumes:
+      - ./volumes/auth-seed/seed.sh:/seed.sh:ro
+
+  # -------------------------------------------------------------------------
+  # PostgREST: /rest/v1/*  (CRUD automático sobre o schema public)
+  # -------------------------------------------------------------------------
+  rest:
+    image: postgrest/postgrest:v12.2.12
+    container_name: desafio-rest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD:-your-super-secret-and-long-postgres-password}@db:5432/${POSTGRES_DB:-postgres}
+      PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS:-public}
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      # Server administrativo (só dentro da rede docker) usado pelo healthcheck.
+      PGRST_ADMIN_SERVER_PORT: "3001"
+    command: ["postgrest"]
+    healthcheck:
+      # A imagem é Ubuntu sem curl/wget: usamos /dev/tcp do bash contra o
+      # endpoint /ready do admin server do PostgREST.
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/3001 && printf "GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && head -n 1 <&3 | grep -q "200"'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # postgres-meta: backend do Studio (introspecção de schema) e rota /pg/*
+  # -------------------------------------------------------------------------
+  meta:
+    image: supabase/postgres-meta:v0.91.0
+    container_name: desafio-meta
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: "8080"
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: "5432"
+      PG_META_DB_NAME: ${POSTGRES_DB:-postgres}
+      PG_META_DB_USER: supabase_admin
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD:-your-super-secret-and-long-postgres-password}
+
+  # -------------------------------------------------------------------------
+  # Kong: API unificada em http://localhost:8000
+  #   /auth/v1/*  -> auth:9999
+  #   /rest/v1/*  -> rest:3000
+  #   /pg/*       -> meta:8080
+  #
+  # depends_on usa service_started (não service_healthy) de propósito: um
+  # healthcheck com problema em auth/rest não pode impedir o Kong de subir.
+  # -------------------------------------------------------------------------
+  kong:
+    image: kong:2.8.1
+    container_name: desafio-kong
+    restart: unless-stopped
+    depends_on:
+      auth:
+        condition: service_started
+      rest:
+        condition: service_started
+      meta:
+        condition: service_started
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      KONG_ADMIN_LISTEN: 127.0.0.1:8001
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+    ports:
+      - "${KONG_HTTP_PORT:-8000}:8000"
+    volumes:
+      - ./volumes/kong/kong.yml:/home/kong/kong.yml:ro
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # Supabase Studio: UI de administração do banco
+  # http://localhost:3000  (Table Editor / SQL Editor)
+  #
+  # A aba "Logs" fica desligada (NEXT_PUBLIC_ENABLE_LOGS=false) porque ela
+  # depende do analytics/logflare, que foi removido deste stack.
+  # -------------------------------------------------------------------------
+  studio:
+    image: supabase/studio:2025.06.30-sha-6f5982d
+    container_name: desafio-studio
+    restart: unless-stopped
+    depends_on:
+      kong:
+        condition: service_started
+      meta:
+        condition: service_started
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your-super-secret-and-long-postgres-password}
+
+      DEFAULT_ORGANIZATION_NAME: ${STUDIO_DEFAULT_ORGANIZATION:-Keeptor}
+      DEFAULT_PROJECT_NAME: ${STUDIO_DEFAULT_PROJECT:-Desafio Fullstack}
+
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL:-http://localhost:8000}
+      SUPABASE_ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWRlbW8iLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MjA1MTIyMjQwMH0.oqNjg-oy3SwR96LB2_v6nh4Zlv19ak4JP8fTmyYRaes}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtZGVtbyIsImlhdCI6MTc2NzIyNTYwMCwiZXhwIjoyMDUxMjIyNDAwfQ.t9-BExJIPiljoy9ufGv_byaZcGB1wyzaj61-D0Hzils}
+      AUTH_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+
+      NEXT_PUBLIC_ENABLE_LOGS: "false"
+      NEXT_ANALYTICS_BACKEND_PROVIDER: postgres
+    ports:
+      - "${STUDIO_PORT:-3000}:3000"
+    # Sobrescreve o healthcheck embutido na imagem, que aponta para
+    # 127.0.0.1:3000. O Next.js bind na interface da rede do container, não no
+    # loopback, então o teste original falha para sempre e o container aparece
+    # como "unhealthy" mesmo servindo normalmente. Pelo nome do serviço, passa.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://studio:3000/api/platform/profile').then((r)=>{if(r.status!==200)throw new Error(r.status)})"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  db-data:
+    name: desafio-fullstack-db-data

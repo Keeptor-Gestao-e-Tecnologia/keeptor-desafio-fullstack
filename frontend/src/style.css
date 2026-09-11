@@ -1,0 +1,13 @@
+@import 'tailwindcss';
+
+/*
+ * A ordem das camadas (`theme, base, primevue, ..., utilities`) é resolvida
+ * automaticamente pelo Tailwind v4 + a opção `cssLayer` configurada no
+ * `main.ts`. Não é necessário declarar `@layer` manualmente aqui.
+ */
+
+html,
+body,
+#app {
+  height: 100%;
+}

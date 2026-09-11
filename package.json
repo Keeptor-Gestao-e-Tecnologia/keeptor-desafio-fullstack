@@ -1,0 +1,19 @@
+{
+  "name": "keeptor-desafio-fullstack",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Atalhos do ambiente local do desafio. Sem dependencias: npm run funciona sem npm install.",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "up": "node scripts/dev.mjs up",
+    "down": "node scripts/dev.mjs down",
+    "reset": "node scripts/dev.mjs reset",
+    "logs": "node scripts/dev.mjs logs",
+    "psql": "node scripts/dev.mjs psql",
+    "status": "node scripts/dev.mjs status",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
